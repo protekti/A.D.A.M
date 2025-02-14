@@ -1,43 +1,42 @@
-import cv2
 import numpy as np
-from numpy.polynomial import Polynomial as P
-
-# Suppress warnings for polyfit if needed
-np.seterr(all='ignore')
-
-def grey(image):
-    image = np.asarray(image)
-    return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-def gauss(image):
-    return cv2.GaussianBlur(image, (7,7), 0)
-
-def canny(image):
-    edges = cv2.Canny(image, 50, 150)
-    return edges
+import cv2
 
 def region(image):
-    h, w = image.shape
+    h, w, temp = image.shape
     triangle = np.array([ 
-        [(0, h), (900, 500), (w, h)] 
+        [(0, h-100), (860, 500),  (1060, 500), (w, h-100)] 
     ])
     mask = np.zeros_like(image)
     mask = cv2.fillPoly(mask, triangle, 255)
     mask = cv2.bitwise_and(image, mask)
     return mask
 
-# Perspective Transform: Define source and destination points
-def perspective_transform(image):
-    h, w = image.shape[:2]
-    # Define points for perspective transform (source points)
-    src_points = np.float32([(150, h-80), (250, 200), (w-180, h-80)])
-    # Define the destination points for the top-down perspective
-    dst_points = np.float32([(0, h), (0, 0), (w, 0), (w, h)])
-    # Get the perspective transformation matrix
-    M = cv2.getPerspectiveTransform(src_points, dst_points)
-    # Apply the perspective warp to the image
-    warped_image = cv2.warpPerspective(image, M, (w, h))
-    return warped_image, M
+def HSV_color_selection(image):
+    """
+    Apply color selection to the HSV images to blackout everything except for white and yellow lane lines.
+        Parameters:
+            image: An np.array compatible with plt.imshow.
+    """
+    imageCopy = image.copy()
+    imageCopy = cv2.GaussianBlur(image, (7, 7), 0) 
+    imageCopy = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    #White color mask
+    lower_white = np.array([0,0,168])
+    upper_white = np.array([172,111,255])
+    white_mask = cv2.inRange(imageCopy, lower_white, upper_white)
+    
+    #Yellow color mask
+    lower_threshold = np.array([80, 80, 18])
+    upper_threshold = np.array([160, 160, 36])
+    yellow_mask = cv2.inRange(imageCopy, lower_threshold, upper_threshold)
+    
+    #Combine white and yellow masks
+    mask = cv2.bitwise_or(white_mask, yellow_mask)
+    masked_image = cv2.bitwise_and(imageCopy, imageCopy, mask = mask)
+
+    regionImage = region(masked_image)
+    
+    return regionImage
 
 def average(image, lines):
     left = []
@@ -76,81 +75,54 @@ def make_points(image, average):
 
     return np.array([x1, y1, x2, y2])
 
-def display_lines(image, left_line, right_line):
-    try:
-        lines_image = np.zeros_like(image)
-        if left_line is not None:
-            cv2.line(lines_image, (int(left_line[0]), int(left_line[1])), (int(left_line[0]), int(left_line[2])), (255, 0, 0), 10)
-        if right_line is not None:
-            cv2.line(lines_image, (int(right_line[0]), int(right_line[1])), (int(right_line[0]), int(right_line[2])), (0, 0, 255), 10)
-        return lines_image
-    except:
-        return None
+def canny(image):
+    edges = cv2.Canny(image, 100, 150)
+    return edges
 
-# Video processing code
-video_input = "test.mp4"
-cap = cv2.VideoCapture(video_input)
+def display_lines(image, line):
+    cv2.line(image, (int(line[0]), int(line[1])), (int(line[2]), int(line[3])), (255, 0, 0), 10)
+    return image
 
-# Check if the video is opened correctly
-if not cap.isOpened():
-    print("Error: Could not open video.")
-    exit()
-
-# Get video details
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-# Initialize VideoWriter to save output video
-out = cv2.VideoWriter('output_video_perspective.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, (frame_width, frame_height))
-
-while True:
+cap = cv2.VideoCapture('test.mp4')
+while(cap.isOpened()):
     ret, frame = cap.read()
-    if not ret:
-        break
-    
-    # Apply perspective transform to get a top-down view
-    #warped_frame, M = perspective_transform(frame)
 
-    # Apply lane detection methods on the warped frame
-    copy = np.copy(frame)
-    grey_img = grey(copy)
-    gaus = gauss(grey_img)
-    edges = canny(gaus)
-    isolated = region(edges)
+    copy = frame.copy()
 
+    colorSelect = HSV_color_selection(copy)
+    edges = canny(colorSelect)
     # Apply Hough Line Transform to detect lines
-    lines = cv2.HoughLinesP(isolated, rho=2, theta=np.pi/180, threshold=35, minLineLength=20, maxLineGap=5)
-
+    lines = cv2.HoughLinesP(edges, rho=2, theta=np.pi/180, threshold=50, minLineLength=50, maxLineGap=20)
+    x1 = lines[0][0][0]
+    x2 = lines[0][0][2]
+    y1 = lines[0][0][1]
+    y2 = lines[0][0][3]
+    print(x1, x2, y1, y2)
     if lines is not None:
         averaged_lines = average(copy, lines)
 
         # Display the lines on the warped frame
-        black_lines = display_lines(copy, *averaged_lines)
+        black_lines = display_lines(copy, [x1, y1, x2, y2])
 
-        # Show the processed frame in a window
         cv2.namedWindow("Lanes", cv2.WINDOW_NORMAL) 
-        cv2.imshow('Lanes', copy)
+        cv2.imshow('Lanes', black_lines)
         cv2.resizeWindow("Lanes", 640, 360) 
     else:
         print("No lines detected.")
 
-    cv2.namedWindow("Lanes4", cv2.WINDOW_NORMAL) 
-    cv2.namedWindow("Lanes2", cv2.WINDOW_NORMAL) 
-    cv2.namedWindow("Lanes3", cv2.WINDOW_NORMAL) 
+    cv2.namedWindow("frame", cv2.WINDOW_NORMAL) 
+    cv2.resizeWindow("frame", 640, 360)
+    cv2.namedWindow("frame2", cv2.WINDOW_NORMAL) 
+    cv2.resizeWindow("frame2", 640, 360)
+    cv2.namedWindow("frame3", cv2.WINDOW_NORMAL) 
+    cv2.resizeWindow("frame3", 640, 360)
 
-    cv2.resizeWindow("Lanes4", 640, 360) 
-    cv2.resizeWindow("Lanes2", 640, 360) 
-    cv2.resizeWindow("Lanes3", 640, 360) 
-    cv2.imshow('Lanes4', isolated)
-    cv2.imshow('Lanes2', edges)
-    cv2.imshow('Lanes3', frame)
+    cv2.imshow('frame',frame)
+    cv2.imshow('frame2',colorSelect)
+    cv2.imshow('frame3',edges)
 
-    # Exit the loop if the user presses 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Release video objects and close windows
 cap.release()
-out.release()
 cv2.destroyAllWindows()
