@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from numpy.polynomial import Polynomial as P
 
 # Suppress warnings for polyfit if needed
 np.seterr(all='ignore')
@@ -9,7 +10,7 @@ def grey(image):
     return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
 def gauss(image):
-    return cv2.GaussianBlur(image, (5,5), 0)
+    return cv2.GaussianBlur(image, (7,7), 0)
 
 def canny(image):
     edges = cv2.Canny(image, 50, 150)
@@ -18,7 +19,7 @@ def canny(image):
 def region(image):
     h, w = image.shape
     triangle = np.array([ 
-        [(0, h), (125, 100), (650, 100), (w, h)] 
+        [(0, h), (900, 500), (w, h)] 
     ])
     mask = np.zeros_like(image)
     mask = cv2.fillPoly(mask, triangle, 255)
@@ -29,7 +30,7 @@ def region(image):
 def perspective_transform(image):
     h, w = image.shape[:2]
     # Define points for perspective transform (source points)
-    src_points = np.float32([(150, h-80), (250, 200), (350, 200), (w-180, h-80)])
+    src_points = np.float32([(150, h-80), (250, 200), (w-180, h-80)])
     # Define the destination points for the top-down perspective
     dst_points = np.float32([(0, h), (0, 0), (w, 0), (w, h)])
     # Get the perspective transformation matrix
@@ -109,17 +110,17 @@ while True:
         break
     
     # Apply perspective transform to get a top-down view
-    warped_frame, M = perspective_transform(frame)
+    #warped_frame, M = perspective_transform(frame)
 
     # Apply lane detection methods on the warped frame
-    copy = np.copy(warped_frame)
+    copy = np.copy(frame)
     grey_img = grey(copy)
     gaus = gauss(grey_img)
     edges = canny(gaus)
     isolated = region(edges)
 
     # Apply Hough Line Transform to detect lines
-    lines = cv2.HoughLinesP(isolated, rho=2, theta=np.pi/180, threshold=70, minLineLength=40, maxLineGap=5)
+    lines = cv2.HoughLinesP(isolated, rho=2, theta=np.pi/180, threshold=35, minLineLength=20, maxLineGap=5)
 
     if lines is not None:
         averaged_lines = average(copy, lines)
@@ -127,23 +128,23 @@ while True:
         # Display the lines on the warped frame
         black_lines = display_lines(copy, *averaged_lines)
 
-        # Ensure that black_lines and copy have the same shape before adding them
-        if black_lines is not None and black_lines.shape == copy.shape:
-            lanes = cv2.addWeighted(copy, 0.8, black_lines, 1, 1)
-
-            # Write the processed frame to output video
-            out.write(lanes)
-
-            # Show the processed frame in a window
-            cv2.imshow('Lanes', lanes)
-        else:
-            print("Error: black_lines or copy shape mismatch.")
+        # Show the processed frame in a window
+        cv2.namedWindow("Lanes", cv2.WINDOW_NORMAL) 
+        cv2.imshow('Lanes', copy)
+        cv2.resizeWindow("Lanes", 640, 360) 
     else:
         print("No lines detected.")
 
-    cv2.imshow('Lanes', isolated)
+    cv2.namedWindow("Lanes4", cv2.WINDOW_NORMAL) 
+    cv2.namedWindow("Lanes2", cv2.WINDOW_NORMAL) 
+    cv2.namedWindow("Lanes3", cv2.WINDOW_NORMAL) 
+
+    cv2.resizeWindow("Lanes4", 640, 360) 
+    cv2.resizeWindow("Lanes2", 640, 360) 
+    cv2.resizeWindow("Lanes3", 640, 360) 
+    cv2.imshow('Lanes4', isolated)
     cv2.imshow('Lanes2', edges)
-    cv2.imshow('Lanes3', warped_frame)
+    cv2.imshow('Lanes3', frame)
 
     # Exit the loop if the user presses 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):
