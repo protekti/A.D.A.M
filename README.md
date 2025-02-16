@@ -4,16 +4,13 @@ A.D.A.M. (Autonomous Driving and Assistance Model) is an intelligent self-drivin
 
 ***THIS PROJECT IS CURRENTLY IN ITS SIMLATOR STAGES AND SHOULD NOT BE USED FOR REAL SCENARIOS.***
 
-## Contributing
+## Types
+As of now there are 2 different types of A.D.A.M.. There is the OPENCV branch which utilises AI for car detection as well as distance aproximation but the AI branch is 100% AI. The AI branch is still in heavy development and is still undergoing major changes.
 
-Contributions are always welcome!
-
-See `contributing.md` for ways to get started.
-
-Please adhere to this project's `code of conduct`.
 ## Installation
 
 As of now there is no official instalation instruction as the current code is in PRE-ALPHA stages meaning that the code isnt stable enough for proper use.
+
 ## Support
 
 For support, email protekti08@gmail.com or DM me on discord @protekti.
