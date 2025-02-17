@@ -21,7 +21,9 @@ From this example, we can determine that the model is named "adam," was trained 
 - **Development Models** (`≥ 100e`)  
   - Used to refine the training program and analyze model performance at lower epoch counts.  
 - **Ready Models** (`≥ 500e`)  
-  - Considered sufficiently trained, with a low percentage of inaccurate lane detections.  
+  - Considered sufficiently trained, with a low percentage of inaccurate lane detections.
+
+ Keep in mind that the larger the epoch number doesnt mean the best results. As of current testing model adam_v0.3a_350e.keras is the current best preforming model.
 
 This structured naming system helps track model progress and categorize models based on their level of training and reliability.
 
