@@ -13,7 +13,7 @@ Each model has a specific naming convention that provides key details about its 
 - **v0.1a** → Version of the training code  
 - **1e** → Number of epochs (An epoch refers to one complete pass through the entire dataset. The dataset is divided into smaller batches that are fed into the algorithm during training. The number of epochs can range from 1 to infinity.)  
 
-From this example, we can determine that the model is named "adam," was trained using training program version **0.1a**, and completed **1 epoch** of training.  
+From this example, we can determine that the model is named "adam", was trained using training program version **0.1a**, and completed **1 epoch** of training.  
 
 ### Epoch Categories:  
 - **Testing Models** (`< 100e`)  
@@ -23,7 +23,7 @@ From this example, we can determine that the model is named "adam," was trained 
 - **Ready Models** (`≥ 500e`)  
   - Considered sufficiently trained, with a low percentage of inaccurate lane detections.
 
- Keep in mind that the larger the epoch number doesnt mean the best results. As of current testing model adam_v0.3a_350e.keras is the current best preforming model.
+Keep in mind that the larger the epoch number doesnt mean the best results. As of current testing, model adam_v0.3a_350e_lite.tflite is the current best preforming model in terms of speed and accuracy.
 
 This structured naming system helps track model progress and categorize models based on their level of training and reliability.
 
