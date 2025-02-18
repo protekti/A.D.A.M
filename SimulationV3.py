@@ -2,122 +2,194 @@ import os
 import cv2
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
+import tkinter as tk
+import threading
+import time
+from queue import Queue
+from PIL import Image, ImageTk
 
-# Load the trained model
-model = tf.keras.models.load_model("latest_best_model.keras")
+# Load the TensorFlow Lite model
+tflite_model_path = "model.tflite"
+interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
+interpreter.allocate_tensors()
+
+# Get input and output tensors
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+# Shared resources to avoid frame processing issues in multiple threads
+frame_lock = threading.Lock()
+ai_enabled = True
+
+# Define a buffer to store frames for batch processing
+frame_buffer = []
+batch_size = 4  # Process in batches of 4 frames (adjustable)
+
+# Queue to store frames to display in Tkinter window
+frame_queue = Queue()
 
 def region(image):
     """ Applies a region mask to isolate lanes. """
     h, w = image.shape[:2]  # Get height and width
-
-    # Define a polygonal region (Adjust coordinates as needed)
-    triangle = np.array([ 
-        [(0, h), (w//2 - 70, h//1.7), (w//2 + 70, h//1.7), (w, h)]
-    ], dtype=np.int32)
-
-    # Create a blank mask
+    triangle = np.array([[(150, h-50), (w//2 - 100, h//1.9), (w//2+150, h//1.9), (w-100, h-50)]], dtype=np.int32)
     mask = np.zeros((h, w), dtype=np.uint8)
-
-    # Fill the polygon (ROI) with white (255)
     cv2.fillPoly(mask, [triangle], 255)
-
-    # Check if the image is grayscale (1 channel) or color (3 channels)
-    if len(image.shape) == 2:  # Grayscale
-        # Convert the grayscale image to 3 channels
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    else:  # Color image (3 channels)
-        image_rgb = image
 
     # Convert mask to 3 channels (for RGB image)
     mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
     # Apply the mask to the image
-    masked_image = cv2.bitwise_and(image_rgb, mask_rgb)
+    masked_image = cv2.bitwise_and(image, mask_rgb)
+    return masked_image, mask
 
-    return masked_image
-
-# Function to preprocess a single image
-def preprocess_image(image, img_size=(256, 256)):
+def preprocess_image(image, img_size=(128, 128)):  # Reduce image size for faster inference
     img = cv2.resize(image, img_size)
     img = img / 255.0  # Normalize
     img = np.expand_dims(img, axis=0)  # Expand dimensions for model input
     return img
 
-# Function to make predictions
-def predict_lanes(image, model):
-    image = region(image)  # Apply region mask
-    img = preprocess_image(image)
-    pred_mask = model.predict(img)[0]  # Get the first (and only) prediction
-    pred_mask = (pred_mask > 0.5).astype(np.uint8) * 255  # Threshold the mask
-    return pred_mask
+def predict_lanes_batch(batch_images, interpreter):
+    """ Runs inference on a batch of images. """
+    batch_input = np.array(batch_images, dtype=np.float32)
+    
+    # Set input tensor for batch processing
+    input_tensor = interpreter.tensor(input_details[0]['index'])
+    input_tensor()[0:len(batch_input)] = batch_input
 
-# Function to extract lane lines from the predicted mask and draw them
-def draw_lane_lines(image, mask):
-    # Find contours in the predicted mask
+    # Invoke the interpreter (run inference)
+    interpreter.invoke()
+
+    # Get output tensor for the batch
+    output_tensor = interpreter.tensor(output_details[0]['index'])()
+    return output_tensor  # Batch of predictions
+
+def average_lines(lines, shape):
+    left_lines = []
+    right_lines = []
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
+            if slope < 0:  # Left lane
+                left_lines.append((x1, y1, x2, y2))
+            else:  # Right lane
+                right_lines.append((x1, y1, x2, y2))
+    
+    def make_line(points):
+        if len(points) == 0:
+            return None
+        x_coords, y_coords = [], []
+        for x1, y1, x2, y2 in points:
+            x_coords.extend([x1, x2])
+            y_coords.extend([y1, y2])
+        poly = np.polyfit(x_coords, y_coords, 1)
+        y1, y2 = shape[0], int(shape[0] * 0.6)
+        x1, x2 = int((y1 - poly[1]) / poly[0]), int((y2 - poly[1]) / poly[0])
+        return x1, y1, x2, y2
+    
+    left_lane = make_line(left_lines)
+    right_lane = make_line(right_lines)
+    
+    return left_lane, right_lane
+
+def draw_lane_lines(image, mask, shape):
     contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Create a copy of the original image to draw the lane lines
     lane_image = np.copy(image)
-    
-    # Iterate over the contours and draw lines
-    for contour in contours:
-        if cv2.contourArea(contour) > 300:  # Ignore small contours
-            # Approximate the contour to a polygon
-            epsilon = 0.02 * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            
-            # Draw the polygon (lane lines)
-            cv2.polylines(lane_image, [approx], isClosed=False, color=(0, 255, 0), thickness=5)
-    
+    lines = cv2.HoughLinesP(mask, 1, np.pi / 180, threshold=50, maxLineGap=200)
+    if lines is not None:
+        left_lane, right_lane = average_lines(lines, shape)
+        if left_lane is not None:
+            x1, y1, x2, y2 = left_lane
+            cv2.line(lane_image, (x1, y1), (x2, y2), (0, 255, 0), 10)
+        if right_lane is not None:
+            x1, y1, x2, y2 = right_lane
+            cv2.line(lane_image, (x1, y1), (x2, y2), (0, 255, 0), 10)
     return lane_image
 
-# Function to overlay the predicted mask on the original image and draw lane lines
 def overlay_mask(image, mask):
-    # Resize mask to match the original image size
     mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]))
-    
-    # Apply color map to mask (convert grayscale to BGR)
     mask_colored = cv2.applyColorMap(mask_resized, cv2.COLORMAP_JET)
-    
-    # Overlay the mask on the original image
     overlay = cv2.addWeighted(image, 0.7, mask_colored, 0.3, 0)
-    
-    # Draw lane lines on the overlay
-    lane_image = draw_lane_lines(image, mask_resized)
-    
+    lane_image = draw_lane_lines(image, mask_resized, image.shape)
     return overlay, lane_image
 
-# Function to process a video and display the output live
-def process_video_live(input_video_path, model):
-    # Open the video file
+def process_video_live(input_video_path, interpreter, ai_enabled=True):
     cap = cv2.VideoCapture(input_video_path)
-    
+    global frame_buffer
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         
-        # Make prediction on the current frame
-        predicted_mask = predict_lanes(frame, model)
-        
-        # Overlay the predicted mask and draw lane lines
-        overlayed_image, lane_image = overlay_mask(frame, predicted_mask)
-        
-        # Display the frame with overlay and lane lines
-        cv2.imshow('Video with Lane Detection (Overlay)', overlayed_image)
-        cv2.imshow('Video with Lane Detection (Lane Lines)', lane_image)
-        
-        # Break the loop if the user presses the 'q' key
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    # Release the video capture object
+        if ai_enabled:
+            region_frame, region_mask = region(frame)
+            img = preprocess_image(region_frame)
+            with frame_lock:
+                frame_buffer.append(img)
+
+            # Process batch when buffer reaches batch size
+            if len(frame_buffer) >= batch_size:
+                batch_images = frame_buffer[:batch_size]
+                frame_buffer = frame_buffer[batch_size:]
+                predictions = predict_lanes_batch(batch_images, interpreter)
+
+                for idx, pred_mask in enumerate(predictions):
+                    pred_mask = (pred_mask > 0.5).astype(np.uint8) * 255  # Threshold
+                    overlayed_image, lane_image = overlay_mask(frame, pred_mask)
+
+                    # Put frame in the queue for Tkinter to display
+                    frame_queue.put(overlayed_image)
+                    frame_queue.put(lane_image)
+        else:
+            frame_queue.put(frame)
+            frame_queue.put(frame)
+
+        # Sleep a little to simulate a frame rate
+        time.sleep(1 / 30)  # assuming 30 FPS for video
+
     cap.release()
-    cv2.destroyAllWindows()
     print("Video processing complete.")
 
-# Example usage
-input_video_path = "test2.mp4"  # Change this to your input video path
+class AI_ToggleApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("AI Video Stream")
+        
+        self.video_label = tk.Label(master)
+        self.video_label.pack()
+        
+        self.update_frame()
 
-process_video_live(input_video_path, model)
+    def update_frame(self):
+        if not frame_queue.empty():
+            frame = frame_queue.get()
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB for Tkinter
+            frame = Image.fromarray(frame)
+            frame = ImageTk.PhotoImage(frame)
+            self.video_label.config(image=frame)
+            self.video_label.image = frame
+        
+        # Call this function after 10ms to continuously update the frame
+        self.master.after(10, self.update_frame)
+
+    def close(self):
+        # Graceful shutdown
+        self.master.quit()
+
+
+# Example usage
+if __name__ == "__main__":
+    try:
+        root = tk.Tk()
+        app = AI_ToggleApp(root)
+        
+        executor = threading.Thread(target=process_video_live, args=("test2.mp4", interpreter, ai_enabled=True))
+        executor.daemon = True
+        executor.start()
+        
+        root.protocol("WM_DELETE_WINDOW", app.close)  # Properly close the Tkinter window
+        root.mainloop()
+
+    except KeyboardInterrupt:
+        print("Program interrupted by user")
+        cv2.destroyAllWindows()
+        exit()
