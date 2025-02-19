@@ -2,192 +2,194 @@ import os
 import cv2
 import numpy as np
 import tensorflow as tf
-import tkinter as tk
-import threading
 import time
+import threading
 from queue import Queue
-from PIL import Image, ImageTk
 
-# Load the TensorFlow Lite model
-tflite_model_path = "model.tflite"
+# Load TensorFlow Lite model with XNNPACK Delegate for optimized performance
+tflite_model_path = "models/adam_v0.3a_350e_lite.tflite"
 interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
 interpreter.allocate_tensors()
 
-# Get input and output tensors
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
+# Get input and output tensor indices
+input_index = interpreter.get_input_details()[0]['index']
+output_index = interpreter.get_output_details()[0]['index']
 
-# Shared resources to avoid frame processing issues in multiple threads
-frame_lock = threading.Lock()
-ai_enabled = True
-
-# Define a buffer to store frames for batch processing
-frame_buffer = []
-batch_size = 4  # Process in batches of 4 frames (adjustable)
-
-# Queue to store frames to display in Tkinter window
-frame_queue = Queue()
+### MULTI-THREADING IMPLEMENTATION ###
+frame_queue = Queue(maxsize=10)  # Stores frames for processing
+output_queue = Queue(maxsize=10)  # Stores processed frames for display
+stop_signal = threading.Event()  # Used to signal threads to stop
 
 def region(image):
-    """ Applies a region mask to isolate lanes. """
+    """ Applies a region mask to isolate only the current lane. """
     h, w = image.shape[:2]  # Get height and width
-    triangle = np.array([[(150, h-50), (w//2 - 100, h//1.9), (w//2+150, h//1.9), (w-100, h-50)]], dtype=np.int32)
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(mask, [triangle], 255)
 
+    # Define a trapezoidal mask that focuses on the vehicle's lane
+    lane_roi = np.array([
+        (w // 2 - 300, h - 50),   # Bottom-left (closer to vehicle)
+        (w // 2 - 75, h - 250),  # Upper-left (farther ahead)
+        (w // 2 + 50, h - 250),  # Upper-right (farther ahead)
+        (w - 50, h - 50)  # Bottom-right (closer to vehicle)
+    ], dtype=np.int32)
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [lane_roi], 255)  # Fill the lane ROI
+    
     # Convert mask to 3 channels (for RGB image)
     mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
+    
     # Apply the mask to the image
     masked_image = cv2.bitwise_and(image, mask_rgb)
     return masked_image, mask
 
-def preprocess_image(image, img_size=(128, 128)):  # Reduce image size for faster inference
-    img = cv2.resize(image, img_size)
+
+def preprocess_image(image, img_size=(256, 256)):
+    """Prepares the image for TensorFlow Lite model inference."""
+    if image is None or image.size == 0:
+        return None
+
+    #masked_image, _ = region(image)  # Apply the focused lane mask
+    cropped_image = image[:, image.shape[1] // 4 : 3 * image.shape[1] // 4]  # Crop side lanes
+
+    img = cv2.resize(cropped_image, img_size)  # Resize for model
     img = img / 255.0  # Normalize
-    img = np.expand_dims(img, axis=0)  # Expand dimensions for model input
-    return img
+    return np.expand_dims(img, axis=0).astype(np.float32)  # Model input shape
 
-def predict_lanes_batch(batch_images, interpreter):
-    """ Runs inference on a batch of images. """
-    batch_input = np.array(batch_images, dtype=np.float32)
-    
-    # Set input tensor for batch processing
-    input_tensor = interpreter.tensor(input_details[0]['index'])
-    input_tensor()[0:len(batch_input)] = batch_input
 
-    # Invoke the interpreter (run inference)
+def predict_lane_single(image, interpreter):
+    if image is None:
+        return None
+
+    interpreter.set_tensor(input_index, image)
     interpreter.invoke()
+    output_tensor = interpreter.get_tensor(output_index)
 
-    # Get output tensor for the batch
-    output_tensor = interpreter.tensor(output_details[0]['index'])()
-    return output_tensor  # Batch of predictions
+    if output_tensor is None or output_tensor.size == 0:
+        return None
 
-def average_lines(lines, shape):
-    left_lines = []
-    right_lines = []
-    for line in lines:
-        for x1, y1, x2, y2 in line:
-            slope = (y2 - y1) / (x2 - x1) if (x2 - x1) != 0 else 0
-            if slope < 0:  # Left lane
-                left_lines.append((x1, y1, x2, y2))
-            else:  # Right lane
-                right_lines.append((x1, y1, x2, y2))
+    # Convert model output to a binary mask
+    pred_mask = (np.squeeze(output_tensor, axis=(0, -1)) > 0.4).astype(np.uint8) * 255
+
+    # 🔹 Correct the mask size issue
+    h, w = 256, 256  # Model output shape
+    lane_mask = np.zeros((h, w), dtype=np.uint8)
+    lane_mask[:, w // 4 : 3 * w // 4] = 255  # Only keep center 50% width
+    pred_mask = cv2.bitwise_and(pred_mask, lane_mask)
+
+    return pred_mask
+
+
+
+def overlay_mask(image, mask, alpha=0.6):
+    """Ensures correct overlaying of AI mask by applying it only within ROI."""
+    if image is None or mask is None or mask.size == 0:
+        return image
+
+    h, w = image.shape[:2]
     
-    def make_line(points):
-        if len(points) == 0:
-            return None
-        x_coords, y_coords = [], []
-        for x1, y1, x2, y2 in points:
-            x_coords.extend([x1, x2])
-            y_coords.extend([y1, y2])
-        poly = np.polyfit(x_coords, y_coords, 1)
-        y1, y2 = shape[0], int(shape[0] * 0.6)
-        x1, x2 = int((y1 - poly[1]) / poly[0]), int((y2 - poly[1]) / poly[0])
-        return x1, y1, x2, y2
+    # 🔹 Resize prediction mask to match the cropped region's size
+    mask_resized = cv2.resize(mask, (w // 2, h), interpolation=cv2.INTER_NEAREST)
     
-    left_lane = make_line(left_lines)
-    right_lane = make_line(right_lines)
+    # 🔹 Place the resized mask at the correct position in the original frame
+    full_mask = np.zeros((h, w), dtype=np.uint8)
+    full_mask[:, w // 4 : 3 * w // 4] = mask_resized  # Fit within the processed ROI
+
+    # Apply a color map for better visibility
+    mask_colored = cv2.applyColorMap(full_mask, cv2.COLORMAP_HOT)
     
-    return left_lane, right_lane
+    # Increase brightness and contrast
+    bright_mask = cv2.addWeighted(mask_colored, 1.2, np.full_like(mask_colored, 255), 0.3, 0)
+    
+    # Overlay mask on the original frame with better visibility
+    return cv2.addWeighted(image, 1 - alpha, bright_mask, alpha, 0)
 
-def draw_lane_lines(image, mask, shape):
-    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    lane_image = np.copy(image)
-    lines = cv2.HoughLinesP(mask, 1, np.pi / 180, threshold=50, maxLineGap=200)
-    if lines is not None:
-        left_lane, right_lane = average_lines(lines, shape)
-        if left_lane is not None:
-            x1, y1, x2, y2 = left_lane
-            cv2.line(lane_image, (x1, y1), (x2, y2), (0, 255, 0), 10)
-        if right_lane is not None:
-            x1, y1, x2, y2 = right_lane
-            cv2.line(lane_image, (x1, y1), (x2, y2), (0, 255, 0), 10)
-    return lane_image
 
-def overlay_mask(image, mask):
-    mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]))
-    mask_colored = cv2.applyColorMap(mask_resized, cv2.COLORMAP_JET)
-    overlay = cv2.addWeighted(image, 0.7, mask_colored, 0.3, 0)
-    lane_image = draw_lane_lines(image, mask_resized, image.shape)
-    return overlay, lane_image
 
-def process_video_live(input_video_path, interpreter, ai_enabled=True):
+def video_reader(input_video_path):
+    """Reads video frames in a separate thread and stores every 10th frame in a queue."""
     cap = cv2.VideoCapture(input_video_path)
-    global frame_buffer
+    frame_count = 0  # Track frame index
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            break
+            continue
         
-        if ai_enabled:
-            region_frame, region_mask = region(frame)
-            img = preprocess_image(region_frame)
-            with frame_lock:
-                frame_buffer.append(img)
+        frame_count += 1
+        if frame_count % 10 != 0:  # Skip frames that are not multiples of 10
+            continue  
 
-            # Process batch when buffer reaches batch size
-            if len(frame_buffer) >= batch_size:
-                batch_images = frame_buffer[:batch_size]
-                frame_buffer = frame_buffer[batch_size:]
-                predictions = predict_lanes_batch(batch_images, interpreter)
+        if frame is None:  # Extra safety check
+            continue
 
-                for idx, pred_mask in enumerate(predictions):
-                    pred_mask = (pred_mask > 0.5).astype(np.uint8) * 255  # Threshold
-                    overlayed_image, lane_image = overlay_mask(frame, pred_mask)
-
-                    # Put frame in the queue for Tkinter to display
-                    frame_queue.put(overlayed_image)
-                    frame_queue.put(lane_image)
-        else:
-            frame_queue.put(frame)
-            frame_queue.put(frame)
-
-        # Sleep a little to simulate a frame rate
-        time.sleep(1 / 30)  # assuming 30 FPS for video
+        frame = cv2.resize(frame, (720, 480), interpolation=cv2.INTER_LINEAR)  # 🔽 Resize to 480p for faster processing
+        
+        if frame_queue.full():
+            time.sleep(0.000000001)  # Reduce waiting time
+        
+        frame_queue.put(frame)  # ✅ Ensures frame is assigned before use
 
     cap.release()
-    print("Video processing complete.")
-
-class AI_ToggleApp:
-    def __init__(self, master):
-        self.master = master
-        self.master.title("AI Video Stream")
-        
-        self.video_label = tk.Label(master)
-        self.video_label.pack()
-        
-        self.update_frame()
-
-    def update_frame(self):
-        if not frame_queue.empty():
-            frame = frame_queue.get()
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB for Tkinter
-            frame = Image.fromarray(frame)
-            frame = ImageTk.PhotoImage(frame)
-            self.video_label.config(image=frame)
-            self.video_label.image = frame
-        
-        # Call this function after 10ms to continuously update the frame
-        self.master.after(10, self.update_frame)
-
-    def close(self):
-        # Graceful shutdown
-        self.master.quit()
+    frame_queue.put(None)  # Signal processing thread to stop
 
 
-# Example usage
+
+def video_processor():
+    """Processes frames from the queue and applies AI-based lane detection."""
+    while True:
+        frame = frame_queue.get()
+        if frame is None:
+            output_queue.put(None)  # Signal display thread to stop
+            continue
+
+        start_time = time.time()
+
+        img = preprocess_image(frame)
+        if img is None:
+            continue
+        pred_mask = predict_lane_single(img, interpreter)
+        if pred_mask is None:
+            continue
+        overlayed_image = overlay_mask(frame, pred_mask)
+
+        output_queue.put(overlayed_image)
+        end_time = time.time()
+        print(f"Processing Time per Frame: {end_time - start_time:.3f} seconds")
+
+def video_display():
+    """Displays processed frames from the output queue."""
+    cv2.namedWindow("AI Processed Video", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("AI Processed Video", 1920, 1080)
+    #cv2.namedWindow("AI Processed Video2", cv2.WINDOW_NORMAL)
+    #cv2.resizeWindow("AI Processed Video2", 640, 360)
+
+    while True:
+        frame = output_queue.get()
+        if frame is None:
+            continue
+        image, _ = region(frame)
+        cv2.imshow("AI Processed Video", frame)
+        #cv2.imshow("AI Processed Video2", image)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            stop_signal.set()  # Stop all threads when 'q' is pressed
+            break
+
+    cv2.destroyAllWindows()
+
 if __name__ == "__main__":
     try:
-        root = tk.Tk()
-        app = AI_ToggleApp(root)
-        
-        executor = threading.Thread(target=process_video_live, args=("test2.mp4", interpreter, ai_enabled=True))
-        executor.daemon = True
-        executor.start()
-        
-        root.protocol("WM_DELETE_WINDOW", app.close)  # Properly close the Tkinter window
-        root.mainloop()
+        reader_thread = threading.Thread(target=video_reader, args=("long test.mp4",))
+        processor_thread = threading.Thread(target=video_processor)
+        display_thread = threading.Thread(target=video_display)
+
+        reader_thread.start()
+        processor_thread.start()
+        display_thread.start()
+
+        reader_thread.join()
+        processor_thread.join()
+        display_thread.join()
 
     except KeyboardInterrupt:
         print("Program interrupted by user")
