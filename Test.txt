@@ -1,31 +1,203 @@
+Code:
+import os
+import cv2
+import numpy as np
+import tensorflow as tf
+import time
+import threading
+from queue import Queue
+
+# Load TensorFlow Lite model with XNNPACK Delegate for optimized performance
+tflite_model_path = "models/adam_v0.3a_350e_lite.tflite"
+interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
+interpreter.allocate_tensors()
+
+# Get input and output tensor indices
+input_index = interpreter.get_input_details()[0]['index']
+output_index = interpreter.get_output_details()[0]['index']
+
+### MULTI-THREADING IMPLEMENTATION ###
+frame_queue = Queue(maxsize=10)  # Stores frames for processing
+output_queue = Queue(maxsize=10)  # Stores processed frames for display
+stop_signal = threading.Event()  # Used to signal threads to stop
+
 def region(image):
     """Applies a region mask to isolate only the current lane."""
-    if image is None or image.size == 0:
-        return None, None
-
     h, w = image.shape[:2]
-
-    # Ensure the image has 3 channels
-    if len(image.shape) == 2:
-        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-
     lane_roi = np.array([
-        (w // 2 - 1300, h - 375),
-        (w // 2 - 250, h - 1000),
-        (w // 2 + 300, h - 1000),
-        (w - 400, h - 375)
+        (w // 2 - 1300, h - 550),
+        (w // 2-400, h-900),
+        (w // 2+300, h-900),
+        (w - 400, h - 550)
     ], dtype=np.int32)
-
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(mask, [lane_roi], 255)
-
-    # Convert mask to a 3-channel image
     mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
-    # Ensure both images have the same size
-    if mask_rgb.shape != image.shape:
-        mask_rgb = cv2.resize(mask_rgb, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
-
     masked_image = cv2.bitwise_and(image, mask_rgb)
-    
     return masked_image, mask
+
+def find_lane_center(mask, original_shape):
+    """Finds the left and right lane positions at the bottom and computes the center."""
+    h_mask, w_mask = mask.shape[:2]
+    h_orig, w_orig = original_shape[:2]
+    nonzero_points = cv2.findNonZero(mask)
+    if nonzero_points is None:
+        return None
+    midpoint = w_mask // 2
+    left_lane = [pt[0][0] for pt in nonzero_points if pt[0][0] < midpoint]
+    right_lane = [pt[0][0] for pt in nonzero_points if pt[0][0] > midpoint]
+    if not left_lane or not right_lane:
+        return None
+    left_x1 = int(np.mean(left_lane))
+    right_x1 = int(np.mean(right_lane))
+    center_x1 = (left_x1 + right_x1) // 2
+    center_y1 = h_mask - 10
+    scale_x = w_orig / w_mask
+    scale_y = h_orig / h_mask
+    mapped_x = int(center_x1 * scale_x)
+    mapped_y = int(center_y1 * scale_y)
+    return (mapped_x, mapped_y)
+
+def preprocess_image(image, img_size=(256, 256)):
+    """Prepares the image for TensorFlow Lite model inference."""
+    if image is None or image.size == 0:
+        return None
+    #image2, _ = region(image)
+    img = cv2.resize(image, img_size)
+    img = img / 255.0
+    return np.expand_dims(img, axis=0).astype(np.float32)
+
+def predict_lane_single(image, interpreter):
+    """Runs the model on the given image and returns the predicted lane mask."""
+    if image is None:
+        return None
+    #image, _ = region(image)
+    interpreter.set_tensor(input_index, image)
+    interpreter.invoke()
+    output_tensor = interpreter.get_tensor(output_index)
+    if output_tensor is None or output_tensor.size == 0:
+        return None
+    pred_mask = (np.squeeze(output_tensor, axis=(0, -1)) > 0.5).astype(np.uint8) * 255
+    return pred_mask
+
+def overlay_mask(image, mask, alpha=0.6):
+    """Overlays both the AI raw mask and the lane area mask onto the original image."""
+    if image is None or mask is None or mask.size == 0:
+        return image
+
+    # Ensure mask is resized to match the image dimensions
+    mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    # Convert mask to 3-channel format
+    mask_colored = np.zeros_like(image, dtype=np.uint8)
+    mask_colored[mask_resized > 0] = (255, 255, 255)  # Red mask for AI prediction
+
+    # Ensure all arrays are properly formatted before blending
+    mask_colored = mask_colored.astype(np.uint8)
+
+    # Blend masks with the original image
+    height, width = 256, 256
+    b, g, r = 0x3E, 0x88, 0xE5  # orange
+    img = np.zeros((height, width, 3), np.uint8)
+    img[:, :, 0] = b
+    img[:, :, 1] = g
+    img[:, :, 2] = r
+    overlayed = cv2.addWeighted(img, 1, mask_colored, 1, 0)  # Overlay AI mask
+
+    # Draw lane center if detected
+    lane_center = find_lane_center(mask_resized, image.shape)
+    if lane_center:
+        cv2.circle(overlayed, lane_center, 10, (0, 255, 0), -1)  # Green dot for lane center
+
+    return overlayed
+
+def video_reader(input_video_path):
+    """Reads video frames and stores every 10th frame in a queue."""
+    cap = cv2.VideoCapture(input_video_path)
+    frame_count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_count % 10 == 0:
+            if frame_queue.full():
+                time.sleep(0.001)
+            frame_queue.put(frame)
+        frame_count += 1
+    cap.release()
+    frame_queue.put(None)
+
+def video_processor():
+    """Processes frames from the queue and applies AI-based lane detection."""
+    while True:
+        frame = frame_queue.get()
+        if frame is None:
+            output_queue.put(None)
+            break
+        img = preprocess_image(frame)
+        if img is None:
+            continue
+        pred_mask = predict_lane_single(img, interpreter)
+        if pred_mask is None:
+            continue
+        overlayed_image = overlay_mask(frame, pred_mask)
+        output_queue.put(overlayed_image)
+
+def video_display():
+    """Displays processed frames from the output queue."""
+    cv2.namedWindow("AI Processed Video", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("AI Processed Video", 640, 320)
+    cv2.namedWindow("AI Processed Video2", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("AI Processed Video2", 640, 320)
+    while True:
+        start = time.time()
+        frame = output_queue.get()
+        if frame is None:
+            break
+        image, _ = region(frame)
+        cv2.imshow("AI Processed Video", frame)
+        cv2.imshow("AI Processed Video2", image)
+        end = time.time()
+        fps = (10 + 1) / (end - start)
+        print("FPS: {:.1f}".format(fps))
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            stop_signal.set()
+            break
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    try:
+        reader_thread = threading.Thread(target=video_reader, args=("test2.mp4",))
+        processor_thread = threading.Thread(target=video_processor)
+        display_thread = threading.Thread(target=video_display)
+        reader_thread.start()
+        processor_thread.start()
+        display_thread.start()
+        reader_thread.join()
+        processor_thread.join()
+        display_thread.join()
+    except KeyboardInterrupt:
+        print("Program interrupted by user")
+        cv2.destroyAllWindows()
+        exit()
+
+
+Error:
+C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
+2025-02-21 08:18:32.895665: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-02-21 08:18:33.863045: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+Exception in thread Thread-2 (video_processor):
+Traceback (most recent call last):
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Program Files (x86)\adam\SimulationV3.py", line 142, in video_processor
+    overlayed_image = overlay_mask(frame, pred_mask)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files (x86)\adam\SimulationV3.py", line 104, in overlay_mask
+    overlayed = cv2.addWeighted(img, 1, mask_colored, 1, 0)  # Overlay AI mask
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+cv2.error: OpenCV(4.11.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\arithm.cpp:665: error: (-209:Sizes of input arguments do not match) The operation is neither 'array op array' (where arrays have the same size and the same number of channels), nor 'array op scalar', nor 'scalar op array' in function 'cv::arithm_op'
