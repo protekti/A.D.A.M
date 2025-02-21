@@ -1,22 +1,3 @@
-Error:
-C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
-2025-02-21 08:26:19.584965: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-2025-02-21 08:26:20.547052: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-Exception in thread Thread-3 (video_display):
-Traceback (most recent call last):
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
-    self.run()
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
-    self._target(*self._args, **self._kwargs)
-  File "C:\Program Files (x86)\adam\SimulationV3.py", line 189, in video_display
-    image = drawLines(image)
-            ^^^^^^^^^^^^^^^^
-  File "C:\Program Files (x86)\adam\SimulationV3.py", line 149, in drawLines
-    lines = cv2.HoughLines(cdstP, 1, np.pi / 180, 150, None, 0, 0)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-cv2.error: OpenCV(4.11.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\hough.cpp:132: error: (-215:Assertion failed) img.type() == CV_8UC1 in function 'cv::HoughLinesStandard'
-
 Code:
 import os
 import cv2
@@ -26,6 +7,7 @@ import time
 import threading
 from queue import Queue
 import sys
+import math
 
 # Load TensorFlow Lite model with XNNPACK Delegate for optimized performance
 tflite_model_path = "models/adam_v0.3a_350e_lite.tflite"
@@ -123,13 +105,14 @@ def overlay_mask(image, mask, alpha=0.6):
     img[:, :, 1] = g
     img[:, :, 2] = r
     overlayed = cv2.addWeighted(img, 1, mask_colored, 1, 0)  # Overlay AI mask
+    overlayed2 = cv2.addWeighted(image, 1, mask_colored, 1, 0)  # Overlay AI mask
 
     # Draw lane center if detected
     lane_center = find_lane_center(mask_resized, image.shape)
     if lane_center:
         cv2.circle(overlayed, lane_center, 10, (0, 255, 0), -1)  # Green dot for lane center
 
-    return overlayed
+    return overlayed, overlayed2
 
 def video_reader(input_video_path):
     """Reads video frames and stores every 10th frame in a queue."""
@@ -160,33 +143,14 @@ def video_processor():
         pred_mask = predict_lane_single(img, interpreter)
         if pred_mask is None:
             continue
-        overlayed_image = overlay_mask(frame, pred_mask)
-        output_queue.put(overlayed_image)
+        overlayed_image, overlayed2 = overlay_mask(frame, pred_mask)
+        output_queue.put(overlayed_image, overlayed2)
 
 def drawLines(image):
     cdstP = np.copy(image)
+    gray = cv2.cvtColor(cdstP, cv2.COLOR_BGR2GRAY)
     
-    lines = cv2.HoughLines(cdstP, 1, np.pi / 180, 150, None, 0, 0)
-    
-    if lines is not None:
-        for i in range(0, len(lines)):
-            rho = lines[i][0][0]
-            theta = lines[i][0][1]
-            a = math.cos(theta)
-            b = math.sin(theta)
-            x0 = a * rho
-            y0 = b * rho
-            pt1 = (int(x0 + 1000*(-b)), int(y0 + 1000*(a)))
-            pt2 = (int(x0 - 1000*(-b)), int(y0 - 1000*(a)))
-            cv2.line(cdst, pt1, pt2, (0,0,255), 3, cv2.LINE_AA)
-    
-    
-    linesP = cv.HoughLinesP(dst, 1, np.pi / 180, 50, None, 50, 10)
-    if linesP is not None:
-        for i in range(0, len(linesP)):
-            l = linesP[i][0]
-            cv2.line(cdstP, (l[0], l[1]), (l[2], l[3]), (0,0,255), 3, cv2.LINE_AA)
-    
+    linesP = cv2.HoughLinesP(gray, 1, np.pi / 180, 50, None, 50, 10)
     if linesP is not None:
         for i in range(0, len(linesP)):
             l = linesP[i][0]
@@ -202,12 +166,12 @@ def video_display():
     cv2.resizeWindow("AI Processed Video2", 640, 320)
     while True:
         start = time.time()
-        frame = output_queue.get()
+        frame, overlayed2 = output_queue.get()
         if frame is None:
             break
         image, _ = region(frame)
         image = drawLines(image)
-        cv2.imshow("AI Processed Video", frame)
+        cv2.imshow("AI Processed Video", overlayed2)
         cv2.imshow("AI Processed Video2", image)
         end = time.time()
         fps = (10 + 1) / (end - start)
@@ -233,3 +197,22 @@ if __name__ == "__main__":
         print("Program interrupted by user")
         cv2.destroyAllWindows()
         sys.exit()
+
+
+Error:
+C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
+2025-02-21 08:31:46.995720: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-02-21 08:31:47.969780: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+Exception in thread Thread-2 (video_processor):
+Traceback (most recent call last):
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Program Files (x86)\adam\SimulationV3.py", line 146, in video_processor
+    output_queue.put(overlayed_image, overlayed2)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\queue.py", line 135, in put
+    if not block:
+           ^^^^^
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
