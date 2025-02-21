@@ -37,8 +37,15 @@ def drawLines(image):
 
         # Draw the averaged left and right lane lines
         if left_avg is not None:
-            cv2.line(cdstP, (left_avg[0], left_avg[1]), (left_avg[2], left_avg[3]), (0, 0, 255), 3, cv2.LINE_AA)
+            cv2.line(cdstP, (left_avg[0], left_avg[1]), (left_avg[2], left_avg[3]), (0, 0, 255), 50, cv2.LINE_AA)
         if right_avg is not None:
-            cv2.line(cdstP, (right_avg[0], right_avg[1]), (right_avg[2], right_avg[3]), (0, 0, 255), 3, cv2.LINE_AA)
-    
+            cv2.line(cdstP, (right_avg[0], right_avg[1]), (right_avg[2], right_avg[3]), (0, 0, 255), 50, cv2.LINE_AA)
+        if left_avg is not None and right_avg is not None:
+            left_x1 = int(np.mean(left_avg[2]))
+            right_x1 = int(np.mean(right_avg[2]))
+            center_x1 = (left_x1 + right_x1) // 2
+
+            cv2.circle(cdstP, (center_x1, 1300), 10, (255,0,0), 10)
     return cdstP
+
+The circle doesnt seem to be in the center of the 2 lines
