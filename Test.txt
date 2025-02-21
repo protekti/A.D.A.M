@@ -1,3 +1,22 @@
+Error:
+C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
+2025-02-21 08:26:19.584965: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2025-02-21 08:26:20.547052: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+Exception in thread Thread-3 (video_display):
+Traceback (most recent call last):
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Program Files (x86)\adam\SimulationV3.py", line 189, in video_display
+    image = drawLines(image)
+            ^^^^^^^^^^^^^^^^
+  File "C:\Program Files (x86)\adam\SimulationV3.py", line 149, in drawLines
+    lines = cv2.HoughLines(cdstP, 1, np.pi / 180, 150, None, 0, 0)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+cv2.error: OpenCV(4.11.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\hough.cpp:132: error: (-215:Assertion failed) img.type() == CV_8UC1 in function 'cv::HoughLinesStandard'
+
 Code:
 import os
 import cv2
@@ -6,6 +25,7 @@ import tensorflow as tf
 import time
 import threading
 from queue import Queue
+import sys
 
 # Load TensorFlow Lite model with XNNPACK Delegate for optimized performance
 tflite_model_path = "models/adam_v0.3a_350e_lite.tflite"
@@ -96,9 +116,9 @@ def overlay_mask(image, mask, alpha=0.6):
     mask_colored = mask_colored.astype(np.uint8)
 
     # Blend masks with the original image
-    height, width = 256, 256
-    b, g, r = 0x3E, 0x88, 0xE5  # orange
-    img = np.zeros((height, width, 3), np.uint8)
+    height, width = mask_colored.shape[:2]
+    b, g, r = 0, 0, 0  # orange
+    img = np.full((height, width, 3), (b,g,r), dtype=np.uint8)
     img[:, :, 0] = b
     img[:, :, 1] = g
     img[:, :, 2] = r
@@ -143,6 +163,37 @@ def video_processor():
         overlayed_image = overlay_mask(frame, pred_mask)
         output_queue.put(overlayed_image)
 
+def drawLines(image):
+    cdstP = np.copy(image)
+    
+    lines = cv2.HoughLines(cdstP, 1, np.pi / 180, 150, None, 0, 0)
+    
+    if lines is not None:
+        for i in range(0, len(lines)):
+            rho = lines[i][0][0]
+            theta = lines[i][0][1]
+            a = math.cos(theta)
+            b = math.sin(theta)
+            x0 = a * rho
+            y0 = b * rho
+            pt1 = (int(x0 + 1000*(-b)), int(y0 + 1000*(a)))
+            pt2 = (int(x0 - 1000*(-b)), int(y0 - 1000*(a)))
+            cv2.line(cdst, pt1, pt2, (0,0,255), 3, cv2.LINE_AA)
+    
+    
+    linesP = cv.HoughLinesP(dst, 1, np.pi / 180, 50, None, 50, 10)
+    if linesP is not None:
+        for i in range(0, len(linesP)):
+            l = linesP[i][0]
+            cv2.line(cdstP, (l[0], l[1]), (l[2], l[3]), (0,0,255), 3, cv2.LINE_AA)
+    
+    if linesP is not None:
+        for i in range(0, len(linesP)):
+            l = linesP[i][0]
+            cv2.line(cdstP, (l[0], l[1]), (l[2], l[3]), (0,0,255), 3, cv2.LINE_AA)
+    
+    return cdstP
+
 def video_display():
     """Displays processed frames from the output queue."""
     cv2.namedWindow("AI Processed Video", cv2.WINDOW_NORMAL)
@@ -155,6 +206,7 @@ def video_display():
         if frame is None:
             break
         image, _ = region(frame)
+        image = drawLines(image)
         cv2.imshow("AI Processed Video", frame)
         cv2.imshow("AI Processed Video2", image)
         end = time.time()
@@ -162,7 +214,7 @@ def video_display():
         print("FPS: {:.1f}".format(fps))
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            stop_signal.set()
+            sys.exit()
             break
     cv2.destroyAllWindows()
 
@@ -180,24 +232,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Program interrupted by user")
         cv2.destroyAllWindows()
-        exit()
-
-
-Error:
-C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
-2025-02-21 08:18:32.895665: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-2025-02-21 08:18:33.863045: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-Exception in thread Thread-2 (video_processor):
-Traceback (most recent call last):
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
-    self.run()
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
-    self._target(*self._args, **self._kwargs)
-  File "C:\Program Files (x86)\adam\SimulationV3.py", line 142, in video_processor
-    overlayed_image = overlay_mask(frame, pred_mask)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Program Files (x86)\adam\SimulationV3.py", line 104, in overlay_mask
-    overlayed = cv2.addWeighted(img, 1, mask_colored, 1, 0)  # Overlay AI mask
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-cv2.error: OpenCV(4.11.0) D:\a\opencv-python\opencv-python\opencv\modules\core\src\arithm.cpp:665: error: (-209:Sizes of input arguments do not match) The operation is neither 'array op array' (where arrays have the same size and the same number of channels), nor 'array op scalar', nor 'scalar op array' in function 'cv::arithm_op'
+        sys.exit()
