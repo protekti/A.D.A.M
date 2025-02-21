@@ -1,4 +1,3 @@
-Code:
 import os
 import cv2
 import numpy as np
@@ -144,11 +143,12 @@ def video_processor():
         if pred_mask is None:
             continue
         overlayed_image, overlayed2 = overlay_mask(frame, pred_mask)
-        output_queue.put(overlayed_image, overlayed2)
+        output_queue.put((overlayed_image, overlayed2))
 
 def drawLines(image):
     cdstP = np.copy(image)
-    gray = cv2.cvtColor(cdstP, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(cdstP,(15,15),0)
+    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
     
     linesP = cv2.HoughLinesP(gray, 1, np.pi / 180, 50, None, 50, 10)
     if linesP is not None:
@@ -166,9 +166,10 @@ def video_display():
     cv2.resizeWindow("AI Processed Video2", 640, 320)
     while True:
         start = time.time()
-        frame, overlayed2 = output_queue.get()
-        if frame is None:
+        frameTuple = output_queue.get()
+        if frameTuple is None:
             break
+        frame, overlayed2 = frameTuple
         image, _ = region(frame)
         image = drawLines(image)
         cv2.imshow("AI Processed Video", overlayed2)
@@ -199,20 +200,4 @@ if __name__ == "__main__":
         sys.exit()
 
 
-Error:
-C:\Program Files (x86)\adam>py -3.12 SimulationV3.py
-2025-02-21 08:31:46.995720: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-2025-02-21 08:31:47.969780: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-Exception in thread Thread-2 (video_processor):
-Traceback (most recent call last):
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
-    self.run()
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
-    self._target(*self._args, **self._kwargs)
-  File "C:\Program Files (x86)\adam\SimulationV3.py", line 146, in video_processor
-    output_queue.put(overlayed_image, overlayed2)
-  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\queue.py", line 135, in put
-    if not block:
-           ^^^^^
-ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+Make it average the left and right lane in the drawLines function
