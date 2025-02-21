@@ -43,12 +43,12 @@ def find_lane_center(mask, original_shape):
     h_orig, w_orig = original_shape[:2]
     nonzero_points = cv2.findNonZero(mask)
     if nonzero_points is None:
-        return None
+        return 0, 0
     midpoint = w_mask // 2
     left_lane = [pt[0][0] for pt in nonzero_points if pt[0][0] < midpoint]
     right_lane = [pt[0][0] for pt in nonzero_points if pt[0][0] > midpoint]
     if not left_lane or not right_lane:
-        return None
+        return 0, 0
     left_x1 = int(np.mean(left_lane))
     right_x1 = int(np.mean(right_lane))
     center_x1 = (left_x1 + right_x1) // 2
@@ -57,6 +57,9 @@ def find_lane_center(mask, original_shape):
     scale_y = h_orig / h_mask
     mapped_x = int(center_x1 * scale_x)
     mapped_y = int(center_y1 * scale_y)
+    if mapped_x == None or mapped_y == None:
+        mapped_x = 0
+        mapped_y = 0
     return mapped_x, mapped_y
 
 def preprocess_image(image, img_size=(256, 256)):
@@ -174,6 +177,7 @@ def video_display():
     """Displays processed frames from the output queue."""
     cv2.namedWindow("AI Processed Video", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("AI Processed Video", 640, 320)
+    speed = 60
     #cv2.namedWindow("AI Processed Video2", cv2.WINDOW_NORMAL)
     #cv2.resizeWindow("AI Processed Video2", 640, 320)
     while True:
@@ -183,11 +187,11 @@ def video_display():
             break
         laneX, laneY, frame = positionTuple
         centerX = frame.shape[0]-250
-        print(laneX-centerX)
+        angleFormula = 100 * float((laneX-centerX)/(speed/4))/float(900)
         if laneX-centerX < -30:
-            print("Left")
+            print(f"Left | Angle: {angleFormula}%")
         elif laneX-centerX > 30:
-            print("Right")
+            print(f"Right | Angle: {angleFormula}%")
         else:
             print("Center")
 
