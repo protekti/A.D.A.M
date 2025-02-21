@@ -1,0 +1,29 @@
+def overlay_mask(image, mask, alpha=0.6):
+    """Overlays both the AI raw mask and the lane area mask onto the original image."""
+    if image is None or mask is None or mask.size == 0:
+        return image
+
+    # Ensure mask is resized to match the image dimensions
+    mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    # Convert mask to 3-channel format
+    mask_colored = np.zeros_like(image, dtype=np.uint8)
+    mask_colored[mask_resized > 0] = (0, 0, 255)  # Red mask for AI prediction
+
+    # Create the green lane area mask
+    lane_area = fill_lane_area(image, mask_resized)
+
+    # Ensure all arrays are properly formatted before blending
+    mask_colored = mask_colored.astype(np.uint8)
+    lane_area = lane_area.astype(np.uint8)
+
+    # Blend masks with the original image
+    overlayed = cv2.addWeighted(image, 1, mask_colored, 0.3, 0)  # Overlay AI mask
+    overlayed = cv2.addWeighted(overlayed, 1, lane_area, 0.5, 0)  # Overlay lane area
+
+    # Draw lane center if detected
+    lane_center = find_lane_center(mask_resized, image.shape)
+    if lane_center:
+        cv2.circle(overlayed, lane_center, 10, (0, 255, 0), -1)  # Green dot for lane center
+
+    return overlayed
