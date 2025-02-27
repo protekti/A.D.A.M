@@ -28,7 +28,7 @@ Keep in mind that the larger the epoch number doesnt mean the best results. As o
 This structured naming system helps track model progress and categorize models based on their level of training and reliability.
 
 ## Carla
-We have decided to switch from real life dash-cam videos for testing to the (CARLA Simulator)[https://carla.org]. It helps us work with the steering, braking, throttle systems and it allows for further development of the software.
+We have decided to switch from real life dash-cam videos for testing to the [CARLA Simulator](https://carla.org). It helps us work with the steering, braking, throttle systems and it allows for further development of the software.
 
 ## Types
 As of now there are 2 different types of A.D.A.M.. There is the OPENCV branch which utilises AI for car detection as well as distance aproximation but the AI branch is 100% AI. The AI branch is still in heavy development and is still undergoing major changes.
